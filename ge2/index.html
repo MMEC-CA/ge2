@@ -12,164 +12,312 @@
   </style>
 </head>
 <body>
-<canvas id="c" width="800" height="450"></canvas>
-<div id="ui">Arrow keys / WASD to move &nbsp;|&nbsp; Space / Up / W to jump &nbsp;|&nbsp; Collect all coins to reach the flag!</div>
+<canvas id="c" width="500" height="500"></canvas>
+<div id="ui">Arrow keys / WASD to move &nbsp;|&nbsp; Space / Up / W to jump &nbsp;|&nbsp; Climb to the flag!</div>
 <script>
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const W = canvas.width, H = canvas.height;
-const GRAV = 0.55, JUMP = -12, SPEED = 4;
+const GRAV = 0.5, JUMP = -11.5, SPEED = 4;
 const TILE = 32;
+const COLS = Math.floor(W / TILE); // 15
 
-const MAP = [
-  "                          ",
-  "                          ",
-  "                          ",
-  "                          ",
-  "                          ",
-  "         22               ",
-  "       #####    22        ",
-  "                      2   ",
-  "   22       ###   ######F ",
-  "  #####   2       ^       ",
-  "        #####             ",
-  "  2                  2    ",
-  "##########################",
-  "##########################",
+// Each level is a tall map. Row 0 = top (where flag is). Player starts at bottom.
+// '#' = wall, '2' = coin, '^' = spike, 'F' = flag (top), ' ' = air
+const LEVELS = [
+  // Level 1 — easy intro, 20 rows tall
+  [
+    "               ",
+    "      F        ",
+    "   #######     ",
+    "               ",
+    "  2   2        ",
+    " ####   ####   ",
+    "               ",
+    "        2   2  ",
+    "   ###    ###  ",
+    "               ",
+    "  2            ",
+    "#####   2      ",
+    "         ####  ",
+    "               ",
+    "    2      2   ",
+    " ####  ####    ",
+    "               ",
+    "  2        2   ",
+    "   ##########  ",
+    "###############",
+  ],
+  // Level 2 — spikes introduced, 22 rows
+  [
+    "               ",
+    "      F        ",
+    "   #######     ",
+    "               ",
+    " 2       2     ",
+    "###   ^  ####  ",
+    "      #        ",
+    "  2       2    ",
+    "####   ####    ",
+    "       ^       ",
+    "       #       ",
+    " 2         2   ",
+    "  ####  ####   ",
+    "               ",
+    "^  ^       2   ",
+    "####  #####    ",
+    "               ",
+    " 2    2    2   ",
+    "## ######  ##  ",
+    "               ",
+    "  2        2   ",
+    "###############",
+  ],
+  // Level 3 — tight gaps, more spikes, 24 rows
+  [
+    "               ",
+    "      F        ",
+    "    #####      ",
+    "               ",
+    "2        2     ",
+    "##  ^  ^ ###   ",
+    "    #  #       ",
+    " 2      2  2   ",
+    "####  ######   ",
+    " ^          ^  ",
+    " #          #  ",
+    "  2    2       ",
+    "   #### ####   ",
+    "               ",
+    "^          ^   ",
+    "##   ####  ##  ",
+    "     ^  ^      ",
+    "     #  #      ",
+    " 2          2  ",
+    "####    #####  ",
+    "               ",
+    "2   2      2   ",
+    " ############  ",
+    "###############",
+  ],
 ];
 
-const ROWS = MAP.length, COLS = MAP[0].length;
-let coins, player, camera, gameState, totalCoins;
-
-function initLevel() {
-  coins = []; gameState = 'playing'; totalCoins = 0;
-  player = { x: 64, y: 300, vx: 0, vy: 0, w: 20, h: 26, onGround: false, facingRight: true };
-  camera = { x: 0 };
-  for (let r = 0; r < ROWS; r++)
-    for (let c = 0; c < COLS; c++)
-      if (MAP[r][c] === '2') { coins.push({ x: c*TILE+8, y: r*TILE+6, collected: false }); totalCoins++; }
-}
-initLevel();
-
 const keys = {};
-document.addEventListener('keydown', e => { keys[e.code] = true; });
+document.addEventListener('keydown', e => { keys[e.code] = true; e.preventDefault(); });
 document.addEventListener('keyup',   e => { keys[e.code] = false; });
 
-function tileAt(px, py) {
-  const c = Math.floor(px/TILE), r = Math.floor(py/TILE);
-  if (r < 0 || r >= ROWS || c < 0 || c >= COLS) return r >= ROWS ? '#' : ' ';
-  return MAP[r][c];
+let levelIndex, map, ROWS, coins, totalCoins, player, camY, gameState, transition;
+
+// Palette per level
+const PALETTES = [
+  { bg: '#0f0f23', wall: '#3d5a80', wallTop: '#4a6fa5', border: '#e94560' },
+  { bg: '#0f1a0f', wall: '#2d5a3d', wallTop: '#3d7a55', border: '#50fa7b' },
+  { bg: '#1a0f1a', wall: '#5a3d6a', wallTop: '#7a5a8a', border: '#bd93f9' },
+];
+
+function loadLevel(idx) {
+  levelIndex = idx;
+  map = LEVELS[idx];
+  ROWS = map.length;
+  coins = []; totalCoins = 0;
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      if ((map[r][c] || ' ') === '2') { coins.push({ c, r, collected: false }); totalCoins++; }
+
+  // Start player at bottom center on the ground
+  const startRow = ROWS - 2;
+  player = { x: W/2 - 10, y: startRow * TILE - 26, vx: 0, vy: 0, w: 20, h: 26, onGround: false, facingRight: true };
+  camY = Math.max(0, Math.min(player.y - H/2, ROWS*TILE - H));
+  gameState = 'playing';
+  transition = null;
+
+  const pal = PALETTES[idx % PALETTES.length];
+  canvas.style.borderColor = pal.border;
 }
-const solid = ch => ch === '#';
+
+loadLevel(0);
+
+function ch(c, r) {
+  if (r < 0) return ' ';
+  if (r >= ROWS) return '#';
+  if (c < 0 || c >= COLS) return '#';
+  return map[r][c] || ' ';
+}
+const solid = t => t === '#';
 
 function resolveX(p) {
   const top = p.y+2, bot = p.y+p.h-2;
   if (p.vx > 0) {
     const rx = p.x+p.w;
-    if (solid(tileAt(rx,top)) || solid(tileAt(rx,bot))) { p.x = Math.floor(rx/TILE)*TILE-p.w-0.01; p.vx=0; }
+    const rc = Math.floor(rx/TILE), rr1 = Math.floor(top/TILE), rr2 = Math.floor(bot/TILE);
+    if (solid(ch(rc,rr1)) || solid(ch(rc,rr2))) { p.x = rc*TILE - p.w - 0.01; p.vx = 0; }
   } else if (p.vx < 0) {
-    if (solid(tileAt(p.x,top)) || solid(tileAt(p.x,bot))) { p.x = Math.floor(p.x/TILE)*TILE+TILE+0.01; p.vx=0; }
+    const lc = Math.floor(p.x/TILE), rr1 = Math.floor(top/TILE), rr2 = Math.floor(bot/TILE);
+    if (solid(ch(lc,rr1)) || solid(ch(lc,rr2))) { p.x = (lc+1)*TILE + 0.01; p.vx = 0; }
   }
 }
 function resolveY(p) {
   p.onGround = false;
+  const lc = Math.floor((p.x+2)/TILE), rc = Math.floor((p.x+p.w-2)/TILE);
   if (p.vy > 0) {
-    const by = p.y+p.h, lx = p.x+2, rx = p.x+p.w-2;
-    if (solid(tileAt(lx,by)) || solid(tileAt(rx,by))) { p.y = Math.floor(by/TILE)*TILE-p.h-0.01; p.vy=0; p.onGround=true; }
+    const br = Math.floor((p.y+p.h)/TILE);
+    if (solid(ch(lc,br)) || solid(ch(rc,br))) { p.y = br*TILE - p.h - 0.01; p.vy = 0; p.onGround = true; }
   } else if (p.vy < 0) {
-    const lx = p.x+2, rx = p.x+p.w-2;
-    if (solid(tileAt(lx,p.y)) || solid(tileAt(rx,p.y))) { p.y = Math.floor(p.y/TILE)*TILE+TILE+0.01; p.vy=0; }
+    const tr = Math.floor(p.y/TILE);
+    if (solid(ch(lc,tr)) || solid(ch(rc,tr))) { p.y = (tr+1)*TILE + 0.01; p.vy = 0; }
   }
+}
+
+function tileAtPx(px, py) {
+  return ch(Math.floor(px/TILE), Math.floor(py/TILE));
 }
 
 function update() {
-  if (gameState !== 'playing') return;
+  if (gameState === 'next') {
+    transition = (transition || 0) + 1;
+    if (transition > 80) { loadLevel(levelIndex + 1); }
+    return;
+  }
+  if (gameState === 'win' || gameState === 'dead') return;
+
   if (keys['ArrowLeft']  || keys['KeyA']) { player.vx = -SPEED; player.facingRight = false; }
   else if (keys['ArrowRight'] || keys['KeyD']) { player.vx = SPEED; player.facingRight = true; }
   else player.vx *= 0.75;
+
   if ((keys['Space'] || keys['ArrowUp'] || keys['KeyW']) && player.onGround) player.vy = JUMP;
-  player.vy = Math.min(player.vy + GRAV, 18);
+
+  player.vy = Math.min(player.vy + GRAV, 16);
   player.x += player.vx; resolveX(player);
   player.y += player.vy; resolveY(player);
-  camera.x = Math.max(0, Math.min(player.x - W/2, COLS*TILE - W));
+
+  // clamp X
+  player.x = Math.max(0, Math.min(player.x, COLS*TILE - player.w));
+
+  // camera: vertical only, follow player
+  const targetCam = player.y - H/2;
+  camY += (targetCam - camY) * 0.12;
+  camY = Math.max(0, Math.min(camY, ROWS*TILE - H));
+
+  // coins
   for (const coin of coins) {
-    if (!coin.collected &&
-        player.x < coin.x+16 && player.x+player.w > coin.x &&
-        player.y < coin.y+16 && player.y+player.h > coin.y)
-      coin.collected = true;
+    if (coin.collected) continue;
+    const cx = coin.c*TILE+8, cy = coin.r*TILE+8;
+    if (player.x < cx+14 && player.x+player.w > cx-6 &&
+        player.y < cy+14 && player.y+player.h > cy-6) coin.collected = true;
   }
-  const mid = tileAt(player.x+player.w/2, player.y+player.h/2);
-  if (mid === '^' || tileAt(player.x+player.w/2, player.y+player.h) === '^') gameState = 'dead';
-  if (player.y > H+100) gameState = 'dead';
-  if (mid === 'F' && coins.filter(c=>c.collected).length === totalCoins) gameState = 'win';
+
+  // spikes — check feet and center
+  const px = player.x + player.w/2;
+  if (tileAtPx(px, player.y+player.h+1) === '^' || tileAtPx(px, player.y+player.h/2) === '^') gameState = 'dead';
+
+  // fall off bottom
+  if (player.y > ROWS*TILE + 64) gameState = 'dead';
+
+  // flag
+  const collected = coins.filter(c=>c.collected).length;
+  if (tileAtPx(px, player.y + player.h/2) === 'F') {
+    if (collected === totalCoins) {
+      if (levelIndex + 1 < LEVELS.length) gameState = 'next';
+      else gameState = 'win';
+      transition = 0;
+    }
+  }
 }
 
-function drawTile(ch, c, r) {
-  const x = c*TILE - camera.x, y = r*TILE;
-  if (ch === '#') {
-    ctx.fillStyle = '#3d5a80'; ctx.fillRect(x,y,TILE,TILE);
-    ctx.fillStyle = '#4a6fa5'; ctx.fillRect(x+1,y+1,TILE-2,6);
-  } else if (ch === '^') {
+function drawTile(t, sx, sy) {
+  const pal = PALETTES[levelIndex % PALETTES.length];
+  if (t === '#') {
+    ctx.fillStyle = pal.wall; ctx.fillRect(sx, sy, TILE, TILE);
+    ctx.fillStyle = pal.wallTop; ctx.fillRect(sx+1, sy+1, TILE-2, 6);
+  } else if (t === '^') {
     ctx.fillStyle = '#e94560';
-    ctx.beginPath(); ctx.moveTo(x+TILE/2,y+2); ctx.lineTo(x+TILE-4,y+TILE-2); ctx.lineTo(x+4,y+TILE-2); ctx.closePath(); ctx.fill();
-  } else if (ch === 'F') {
-    ctx.fillStyle = '#ffd700'; ctx.fillRect(x+12,y+2,4,20);
-    ctx.fillStyle = '#ff6b35'; ctx.fillRect(x+16,y+2,12,10);
+    ctx.beginPath(); ctx.moveTo(sx+TILE/2, sy+3); ctx.lineTo(sx+TILE-4, sy+TILE-2); ctx.lineTo(sx+4, sy+TILE-2); ctx.closePath(); ctx.fill();
+  } else if (t === 'F') {
+    ctx.fillStyle = '#ffd700'; ctx.fillRect(sx+14, sy+2, 4, 22);
+    ctx.fillStyle = '#ff6b35'; ctx.fillRect(sx+18, sy+2, 11, 10);
   }
 }
 
 function drawPlayer(p) {
-  const x = p.x - camera.x, y = p.y;
-  ctx.fillStyle = '#e94560'; ctx.fillRect(x+2, y+10, p.w-4, p.h-10);
-  ctx.fillStyle = '#f4a261'; ctx.fillRect(x+2, y, p.w-4, 12);
+  const sx = p.x, sy = p.y - camY;
+  ctx.fillStyle = '#e94560'; ctx.fillRect(sx+2, sy+10, p.w-4, p.h-10);
+  ctx.fillStyle = '#f4a261'; ctx.fillRect(sx+2, sy, p.w-4, 12);
   ctx.fillStyle = '#1a1a2e';
-  const ex = p.facingRight ? x+p.w-9 : x+5;
-  ctx.fillRect(ex, y+3, 4, 4);
+  ctx.fillRect(p.facingRight ? sx+p.w-9 : sx+5, sy+3, 4, 4);
   ctx.fillStyle = '#2d3561';
-  ctx.fillRect(x+2, y+p.h-8, 7, 8);
-  ctx.fillRect(x+p.w-9, y+p.h-8, 7, 8);
+  ctx.fillRect(sx+2, sy+p.h-8, 7, 8);
+  ctx.fillRect(sx+p.w-9, sy+p.h-8, 7, 8);
 }
 
-function overlay(color, title, sub) {
-  ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0,0,W,H);
+function overlay(color, line1, line2) {
+  ctx.fillStyle = 'rgba(0,0,0,0.65)'; ctx.fillRect(0,0,W,H);
   ctx.textAlign = 'center';
-  ctx.fillStyle = color; ctx.font = 'bold 48px monospace'; ctx.fillText(title, W/2, H/2-20);
-  ctx.fillStyle = '#ccc'; ctx.font = '18px monospace'; ctx.fillText(sub, W/2, H/2+20);
+  ctx.fillStyle = color; ctx.font = 'bold 44px monospace'; ctx.fillText(line1, W/2, H/2-18);
+  ctx.fillStyle = '#ccc'; ctx.font = '16px monospace'; ctx.fillText(line2, W/2, H/2+18);
   ctx.textAlign = 'left';
 }
 
 function draw() {
-  ctx.fillStyle = '#0f0f23'; ctx.fillRect(0,0,W,H);
-  ctx.fillStyle = 'rgba(255,255,255,0.3)';
-  for (let i = 0; i < 60; i++) ctx.fillRect((i*137+50)%W, (i*97+20)%(H*0.6), 1, 1);
+  const pal = PALETTES[levelIndex % PALETTES.length];
+  ctx.fillStyle = pal.bg; ctx.fillRect(0,0,W,H);
 
-  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) drawTile(MAP[r][c], c, r);
+  // stars
+  ctx.fillStyle = 'rgba(255,255,255,0.25)';
+  for (let i = 0; i < 50; i++) ctx.fillRect((i*173+31)%W, (i*89+17)%H, 1, 1);
 
+  // tiles
+  const rStart = Math.max(0, Math.floor(camY/TILE)-1);
+  const rEnd   = Math.min(ROWS, rStart + Math.ceil(H/TILE)+2);
+  for (let r = rStart; r < rEnd; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const t = ch(c, r);
+      if (t !== ' ') drawTile(t, c*TILE, r*TILE - camY);
+    }
+  }
+
+  // coins
   const t = Date.now()/400;
   for (const coin of coins) {
     if (coin.collected) continue;
-    const x = coin.x - camera.x, y = coin.y + Math.sin(t+coin.x)*2;
-    ctx.fillStyle = '#ffd700'; ctx.beginPath(); ctx.arc(x+8,y+8,7,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.beginPath(); ctx.arc(x+5,y+5,3,0,Math.PI*2); ctx.fill();
+    const sx = coin.c*TILE+8, sy = coin.r*TILE+8 - camY + Math.sin(t+coin.c)*2;
+    if (sy < -20 || sy > H+20) continue;
+    ctx.fillStyle = '#ffd700'; ctx.beginPath(); ctx.arc(sx,sy,7,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.beginPath(); ctx.arc(sx-2,sy-2,3,0,Math.PI*2); ctx.fill();
   }
 
   drawPlayer(player);
 
+  // HUD
   const collected = coins.filter(c=>c.collected).length;
-  ctx.fillStyle = '#ffd700'; ctx.font = 'bold 16px monospace';
-  ctx.fillText(`Coins: ${collected} / ${totalCoins}`, 12, 24);
+  ctx.fillStyle = '#ffd700'; ctx.font = 'bold 15px monospace';
+  ctx.fillText(`Level ${levelIndex+1}/${LEVELS.length}  Coins: ${collected}/${totalCoins}`, 10, 22);
 
-  const mid = tileAt(player.x+player.w/2, player.y+player.h/2);
-  if (mid === 'F' && collected < totalCoins) {
-    ctx.fillStyle = '#fff'; ctx.font = '14px monospace'; ctx.textAlign = 'center';
+  // flag hint
+  if (tileAtPx(player.x+player.w/2, player.y+player.h/2) === 'F' && collected < totalCoins) {
+    ctx.fillStyle = '#fff'; ctx.font = '13px monospace'; ctx.textAlign = 'center';
     ctx.fillText(`Collect all ${totalCoins} coins first!`, W/2, H/2);
     ctx.textAlign = 'left';
   }
-  if (gameState === 'dead') overlay('#e94560', 'YOU DIED', 'Press R to restart');
-  if (gameState === 'win')  overlay('#ffd700', 'YOU WIN!',  'Press R to restart');
+
+  if (gameState === 'next') {
+    const alpha = Math.min(1, (transition||0)/50);
+    ctx.fillStyle = `rgba(0,0,0,${alpha})`; ctx.fillRect(0,0,W,H);
+    if (alpha > 0.6) {
+      ctx.textAlign = 'center'; ctx.fillStyle = '#ffd700'; ctx.font = 'bold 36px monospace';
+      ctx.fillText(`Level ${levelIndex+2}`, W/2, H/2);
+      ctx.textAlign = 'left';
+    }
+  }
+  if (gameState === 'dead') overlay('#e94560', 'YOU DIED', 'Press R to retry');
+  if (gameState === 'win')  overlay('#ffd700', 'YOU WIN!', 'Press R to play again');
 }
 
-document.addEventListener('keydown', e => { if (e.code === 'KeyR' && gameState !== 'playing') initLevel(); });
+document.addEventListener('keydown', e => {
+  if (e.code === 'KeyR') {
+    if (gameState === 'dead') loadLevel(levelIndex);
+    else if (gameState === 'win') loadLevel(0);
+  }
+});
 
 (function loop() { update(); draw(); requestAnimationFrame(loop); })();
 </script>
