@@ -24,83 +24,46 @@ const COLS = Math.floor(W / TILE); // 15
 
 // Each level is a tall map. Row 0 = top (where flag is). Player starts at bottom.
 // '#' = wall, '2' = coin, '^' = spike, 'F' = flag (top), ' ' = air
-const LEVELS = [
-  // Level 1 — easy intro, 20 rows tall
-  [
-    "               ",
-    "      F        ",
-    "   #######     ",
-    "               ",
-    "  2   2        ",
-    " ####   ####   ",
-    "               ",
-    "        2   2  ",
-    "   ###    ###  ",
-    "               ",
-    "  2            ",
-    "#####   2      ",
-    "         ####  ",
-    "               ",
-    "    2      2   ",
-    " ####  ####    ",
-    "               ",
-    "  2        2   ",
-    "   ##########  ",
-    "###############",
-  ],
-  // Level 2 — spikes introduced, 22 rows
-  [
-    "               ",
-    "      F        ",
-    "   #######     ",
-    "               ",
-    " 2       2     ",
-    "###   ^  ####  ",
-    "      #        ",
-    "  2       2    ",
-    "####   ####    ",
-    "       ^       ",
-    "       #       ",
-    " 2         2   ",
-    "  ####  ####   ",
-    "               ",
-    "^  ^       2   ",
-    "####  #####    ",
-    "               ",
-    " 2    2    2   ",
-    "## ######  ##  ",
-    "               ",
-    "  2        2   ",
-    "###############",
-  ],
-  // Level 3 — tight gaps, more spikes, 24 rows
-  [
-    "               ",
-    "      F        ",
-    "    #####      ",
-    "               ",
-    "2        2     ",
-    "##  ^  ^ ###   ",
-    "    #  #       ",
-    " 2      2  2   ",
-    "####  ######   ",
-    " ^          ^  ",
-    " #          #  ",
-    "  2    2       ",
-    "   #### ####   ",
-    "               ",
-    "^          ^   ",
-    "##   ####  ##  ",
-    "     ^  ^      ",
-    "     #  #      ",
-    " 2          2  ",
-    "####    #####  ",
-    "               ",
-    "2   2      2   ",
-    " ############  ",
-    "###############",
-  ],
-];
+// Procedural Level Generator
+function generateLevel(idx) {
+  const h = 20 + idx * 10;
+  const rows = Array.from({ length: h }, () => Array(COLS).fill(' '));
+  
+  // Bottom floor
+  rows[h-1].fill('#');
+  
+  // Flag at top
+  rows[1][Math.floor(COLS/2)] = 'F';
+  
+  // Generate platforms upwards
+  let curY = h - 1;
+  let lastX = Math.floor(COLS / 2);
+  while (curY > 3) {
+    const step = 3 + Math.floor(Math.random() * 2); // vertical gap 3 or 4
+    curY -= step;
+    if (curY < 2) break;
+    
+    const pWidth = 4 + Math.floor(Math.random() * 4);
+    // Keep next platform within reach of the previous one
+    const minX = Math.max(0, lastX - 5);
+    const maxX = Math.min(COLS - pWidth, lastX + 5);
+    const pX = minX + Math.floor(Math.random() * (maxX - minX + 1));
+    
+    for (let x = pX; x < pX + pWidth; x++) {
+      rows[curY][x] = '#';
+      if (Math.random() < 0.12 && x > pX && x < pX + pWidth - 1) {
+        rows[curY][x] = '^';
+      }
+    }
+    
+    const coinX = pX + Math.floor(Math.random() * pWidth);
+    if (rows[curY][coinX] === '#') rows[curY-1][coinX] = '2';
+    
+    lastX = pX + Math.floor(pWidth / 2);
+  }
+
+  return rows.map(r => r.join(''));
+}
 
 const keys = {};
 document.addEventListener('keydown', e => { keys[e.code] = true; e.preventDefault(); });
@@ -113,11 +76,12 @@ const PALETTES = [
   { bg: '#0f0f23', wall: '#3d5a80', wallTop: '#4a6fa5', border: '#e94560' },
   { bg: '#0f1a0f', wall: '#2d5a3d', wallTop: '#3d7a55', border: '#50fa7b' },
   { bg: '#1a0f1a', wall: '#5a3d6a', wallTop: '#7a5a8a', border: '#bd93f9' },
+  { bg: '#1a1a0f', wall: '#6a5a3d', wallTop: '#8a7a5a', border: '#f1fa8c' },
 ];
 
 function loadLevel(idx) {
   levelIndex = idx;
-  map = LEVELS[idx];
+  map = generateLevel(idx);
   ROWS = map.length;
   coins = []; totalCoins = 0;
   for (let r = 0; r < ROWS; r++)
@@ -136,6 +100,7 @@ function loadLevel(idx) {
 }
 
 loadLevel(0);
+
 
 function ch(c, r) {
   if (r < 0) return ' ';
@@ -217,8 +182,7 @@ function update() {
   const collected = coins.filter(c=>c.collected).length;
   if (tileAtPx(px, player.y + player.h/2) === 'F') {
     if (collected === totalCoins) {
-      if (levelIndex + 1 < LEVELS.length) gameState = 'next';
-      else gameState = 'win';
+      gameState = 'next';
       transition = 0;
     }
   }
@@ -290,7 +254,7 @@ function draw() {
   // HUD
   const collected = coins.filter(c=>c.collected).length;
   ctx.fillStyle = '#ffd700'; ctx.font = 'bold 15px monospace';
-  ctx.fillText(`Level ${levelIndex+1}/${LEVELS.length}  Coins: ${collected}/${totalCoins}`, 10, 22);
+  ctx.fillText(`Level ${levelIndex+1}  Coins: ${collected}/${totalCoins}`, 10, 22);
 
   // flag hint
   if (tileAtPx(player.x+player.w/2, player.y+player.h/2) === 'F' && collected < totalCoins) {
