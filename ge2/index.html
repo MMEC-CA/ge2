@@ -44,20 +44,33 @@ function generateLevel(idx) {
     if (curY < 2) break;
     
     const pWidth = 4 + Math.floor(Math.random() * 4);
-    // Keep next platform within reach of the previous one
     const minX = Math.max(0, lastX - 5);
     const maxX = Math.min(COLS - pWidth, lastX + 5);
     const pX = minX + Math.floor(Math.random() * (maxX - minX + 1));
     
     for (let x = pX; x < pX + pWidth; x++) {
       rows[curY][x] = '#';
-      if (Math.random() < 0.12 && x > pX && x < pX + pWidth - 1) {
-        rows[curY][x] = '^';
+      const rand = Math.random();
+      if (rand < 0.1) {
+        rows[curY][x] = '^'; // Spike
+      } else if (rand < 0.15) {
+        rows[curY][x] = 'S'; // Saw
+      }
+    }
+    
+    // Occasional lava floor segments
+    if (Math.random() < 0.2) {
+      const lWidth = 2 + Math.floor(Math.random() * 3);
+      const lX = Math.floor(Math.random() * (COLS - lWidth));
+      for (let x = lX; x < lX + lWidth; x++) {
+        if (rows[curY][x] === ' ') rows[curY][x] = 'L';
       }
     }
     
     const coinX = pX + Math.floor(Math.random() * pWidth);
-    if (rows[curY][coinX] === '#') rows[curY-1][coinX] = '2';
+    if (rows[curY][coinX] === '#' || rows[curY][coinX] === 'S' || rows[curY][coinX] === '^') {
+      rows[curY-1][coinX] = '2';
+    }
     
     lastX = pX + Math.floor(pWidth / 2);
   }
@@ -70,13 +83,14 @@ document.addEventListener('keydown', e => { keys[e.code] = true; e.preventDefaul
 document.addEventListener('keyup',   e => { keys[e.code] = false; });
 
 let levelIndex, map, ROWS, coins, totalCoins, player, camY, gameState, transition;
+let jumpPressed = false;
 
 // Palette per level
 const PALETTES = [
-  { bg: '#0f0f23', wall: '#3d5a80', wallTop: '#4a6fa5', border: '#e94560' },
-  { bg: '#0f1a0f', wall: '#2d5a3d', wallTop: '#3d7a55', border: '#50fa7b' },
-  { bg: '#1a0f1a', wall: '#5a3d6a', wallTop: '#7a5a8a', border: '#bd93f9' },
-  { bg: '#1a1a0f', wall: '#6a5a3d', wallTop: '#8a7a5a', border: '#f1fa8c' },
+  { bg: '#0f0f23', wall: '#3d5a80', wallTop: '#4a6fa5', border: '#e94560', lava: '#ff4d4d', saw: '#a0a0a0' },
+  { bg: '#0f1a0f', wall: '#2d5a3d', wallTop: '#3d7a55', border: '#50fa7b', lava: '#ffb347', saw: '#b0b0b0' },
+  { bg: '#1a0f1a', wall: '#5a3d6a', wallTop: '#7a5a8a', border: '#bd93f9', lava: '#ff00ff', saw: '#909090' },
+  { bg: '#1a1a0f', wall: '#6a5a3d', wallTop: '#8a7a5a', border: '#f1fa8c', lava: '#ff8c00', saw: '#808080' },
 ];
 
 function loadLevel(idx) {
@@ -90,7 +104,12 @@ function loadLevel(idx) {
 
   // Start player at bottom center on the ground
   const startRow = ROWS - 2;
-  player = { x: W/2 - 10, y: startRow * TILE - 26, vx: 0, vy: 0, w: 20, h: 26, onGround: false, facingRight: true };
+  player = { 
+    x: W/2 - 10, y: startRow * TILE - 26, 
+    vx: 0, vy: 0, w: 20, h: 26, 
+    onGround: false, facingRight: true,
+    jumps: 0
+  };
   camY = Math.max(0, Math.min(player.y - H/2, ROWS*TILE - H));
   gameState = 'playing';
   transition = null;
@@ -126,7 +145,7 @@ function resolveY(p) {
   const lc = Math.floor((p.x+2)/TILE), rc = Math.floor((p.x+p.w-2)/TILE);
   if (p.vy > 0) {
     const br = Math.floor((p.y+p.h)/TILE);
-    if (solid(ch(lc,br)) || solid(ch(rc,br))) { p.y = br*TILE - p.h - 0.01; p.vy = 0; p.onGround = true; }
+    if (solid(ch(lc,br)) || solid(ch(rc,br))) { p.y = br*TILE - p.h - 0.01; p.vy = 0; p.onGround = true; p.jumps = 0; }
   } else if (p.vy < 0) {
     const tr = Math.floor(p.y/TILE);
     if (solid(ch(lc,tr)) || solid(ch(rc,tr))) { p.y = (tr+1)*TILE + 0.01; p.vy = 0; }
@@ -149,7 +168,17 @@ function update() {
   else if (keys['ArrowRight'] || keys['KeyD']) { player.vx = SPEED; player.facingRight = true; }
   else player.vx *= 0.75;
 
-  if ((keys['Space'] || keys['ArrowUp'] || keys['KeyW']) && player.onGround) player.vy = JUMP;
+  const jumpKey = keys['Space'] || keys['ArrowUp'] || keys['KeyW'];
+  if (jumpKey && !jumpPressed) {
+    if (player.onGround) {
+      player.vy = JUMP;
+      player.jumps = 1;
+    } else if (player.jumps < 2) {
+      player.vy = JUMP * 0.9; // Double jump slightly weaker
+      player.jumps = 2;
+    }
+  }
+  jumpPressed = jumpKey;
 
   player.vy = Math.min(player.vy + GRAV, 16);
   player.x += player.vx; resolveX(player);
@@ -171,9 +200,13 @@ function update() {
         player.y < cy+14 && player.y+player.h > cy-6) coin.collected = true;
   }
 
-  // spikes — check feet and center
-  const px = player.x + player.w/2;
-  if (tileAtPx(px, player.y+player.h+1) === '^' || tileAtPx(px, player.y+player.h/2) === '^') gameState = 'dead';
+  // Hazards — spikes, lava, saws
+  const px = player.x + player.w/2, py = player.y + player.h/2;
+  const points = [[px, player.y+player.h+1], [px, py], [player.x, py], [player.x+player.w, py]];
+  for (const [hx, hy] of points) {
+    const t = tileAtPx(hx, hy);
+    if (t === '^' || t === 'L' || t === 'S') { gameState = 'dead'; break; }
+  }
 
   // fall off bottom
   if (player.y > ROWS*TILE + 64) gameState = 'dead';
@@ -196,6 +229,21 @@ function drawTile(t, sx, sy) {
   } else if (t === '^') {
     ctx.fillStyle = '#e94560';
     ctx.beginPath(); ctx.moveTo(sx+TILE/2, sy+3); ctx.lineTo(sx+TILE-4, sy+TILE-2); ctx.lineTo(sx+4, sy+TILE-2); ctx.closePath(); ctx.fill();
+  } else if (t === 'L') {
+    ctx.fillStyle = pal.lava; ctx.fillRect(sx, sy+4, TILE, TILE-4);
+    ctx.fillStyle = '#fff'; ctx.globalAlpha = 0.3;
+    ctx.fillRect(sx, sy+4, TILE, 2); ctx.globalAlpha = 1.0;
+  } else if (t === 'S') {
+    ctx.save();
+    ctx.translate(sx + TILE/2, sy + TILE/2);
+    ctx.rotate(Date.now() / 100);
+    ctx.fillStyle = pal.saw;
+    for (let i = 0; i < 8; i++) {
+      ctx.rotate(Math.PI / 4);
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(TILE/2, 0); ctx.lineTo(TILE/4, TILE/8); ctx.closePath(); ctx.fill();
+    }
+    ctx.fillStyle = '#444'; ctx.beginPath(); ctx.arc(0,0,4,0,Math.PI*2); ctx.fill();
+    ctx.restore();
   } else if (t === 'F') {
     ctx.fillStyle = '#ffd700'; ctx.fillRect(sx+14, sy+2, 4, 22);
     ctx.fillStyle = '#ff6b35'; ctx.fillRect(sx+18, sy+2, 11, 10);
