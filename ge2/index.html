@@ -54,7 +54,7 @@ function generateLevel(idx) {
       if (!isMoving) {
         const rand = Math.random();
         if (rand < 0.1) {
-          rows[curY][x] = '^'; // Spike
+          rows[curY][x] = 'E'; // Emitter
         } else if (rand < 0.15) {
           rows[curY][x] = 'S'; // Saw
         }
@@ -85,15 +85,15 @@ const keys = {};
 document.addEventListener('keydown', e => { keys[e.code] = true; e.preventDefault(); });
 document.addEventListener('keyup',   e => { keys[e.code] = false; });
 
-let levelIndex, map, ROWS, coins, totalCoins, movingPlatforms, player, camY, gameState, transition;
+let levelIndex, map, ROWS, coins, totalCoins, movingPlatforms, saws, fireballs, player, camY, gameState, transition;
 let jumpPressed = false;
 
 // Palette per level
 const PALETTES = [
-  { bg: '#0f0f23', wall: '#3d5a80', wallTop: '#4a6fa5', border: '#e94560', lava: '#ff4d4d', saw: '#a0a0a0', plat: '#5a789c' },
-  { bg: '#0f1a0f', wall: '#2d5a3d', wallTop: '#3d7a55', border: '#50fa7b', lava: '#ffb347', saw: '#b0b0b0', plat: '#4d7a5a' },
-  { bg: '#1a0f1a', wall: '#5a3d6a', wallTop: '#7a5a8a', border: '#bd93f9', lava: '#ff00ff', saw: '#909090', plat: '#7a5a8a' },
-  { bg: '#1a1a0f', wall: '#6a5a3d', wallTop: '#8a7a5a', border: '#f1fa8c', lava: '#ff8c00', saw: '#808080', plat: '#8a7a5a' },
+  { bg: '#0f0f23', wall: '#3d5a80', wallTop: '#4a6fa5', border: '#e94560', lava: '#ff4d4d', saw: '#a0a0a0', plat: '#5a789c', fire: '#ff9a00' },
+  { bg: '#0f1a0f', wall: '#2d5a3d', wallTop: '#3d7a55', border: '#50fa7b', lava: '#ffb347', saw: '#b0b0b0', plat: '#4d7a5a', fire: '#ffcc33' },
+  { bg: '#1a0f1a', wall: '#5a3d6a', wallTop: '#7a5a8a', border: '#bd93f9', lava: '#ff00ff', saw: '#909090', plat: '#7a5a8a', fire: '#ff0088' },
+  { bg: '#1a1a0f', wall: '#6a5a3d', wallTop: '#8a7a5a', border: '#f1fa8c', lava: '#ff8c00', saw: '#808080', plat: '#8a7a5a', fire: '#ffff00' },
 ];
 
 function loadLevel(idx) {
@@ -108,44 +108,35 @@ function loadLevel(idx) {
 }
 
 function resetLevel() {
-  coins = []; totalCoins = 0; movingPlatforms = [];
+  coins = []; totalCoins = 0; movingPlatforms = []; fireballs = []; saws = [];
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
       const t = map[r][c];
       if (t === '2') { coins.push({ c, r, collected: false }); totalCoins++; }
       if (t === 'M') {
-        // Find platform width
-        let w = 1;
-        while (c + w < COLS && map[r][c+w] === 'M') w++;
-        // Create moving platform
+        let w = 1; while (c + w < COLS && map[r][c+w] === 'M') w++;
         movingPlatforms.push({
-          x: c * TILE, y: r * TILE,
-          startX: c * TILE,
-          w: w * TILE, h: TILE,
-          vx: 1.5 + Math.random() * 1.5,
-          range: TILE * (2 + Math.random() * 3)
+          x: c * TILE, y: r * TILE, startX: c * TILE, w: w * TILE, h: TILE,
+          vx: 1.5 + Math.random() * 1.5, range: TILE * (2 + Math.random() * 3)
         });
-        // Erase 'M's from map to avoid static collision
-        const rowArr = map[r].split('');
-        for(let i=0; i<w; i++) rowArr[c+i] = ' ';
-        map[r] = rowArr.join('');
         c += w - 1;
+      }
+      if (t === 'S') {
+        saws.push({
+          x: c * TILE + TILE/2, y: r * TILE + TILE/2, startX: c * TILE + TILE/2,
+          vx: Math.random() < 0.5 ? 2 : -2, range: TILE * (2 + Math.random() * 2)
+        });
       }
     }
   }
 
-  // Start player at bottom center on the ground
   const startRow = ROWS - 2;
   player = { 
-    x: W/2 - 10, y: startRow * TILE - 26, 
-    vx: 0, vy: 0, w: 20, h: 26, 
-    onGround: false, facingRight: true,
-    jumps: 0,
-    onPlatform: null
+    x: W/2 - 10, y: startRow * TILE - 26, vx: 0, vy: 0, w: 20, h: 26, 
+    onGround: false, facingRight: true, jumps: 0, onPlatform: null
   };
   camY = Math.max(0, Math.min(player.y - H/2, ROWS*TILE - H));
-  gameState = 'playing';
-  transition = null;
+  gameState = 'playing'; transition = null;
 }
 
 loadLevel(0);
@@ -213,10 +204,36 @@ function update() {
   // Move platforms
   for (const plat of movingPlatforms) {
     plat.x += plat.vx;
-    if (Math.abs(plat.x - plat.startX) > plat.range) {
-      plat.vx *= -1;
-      plat.x += plat.vx;
+    if (Math.abs(plat.x - plat.startX) > plat.range) { plat.vx *= -1; plat.x += plat.vx; }
+  }
+
+  // Move saws
+  for (const saw of saws) {
+    saw.x += saw.vx;
+    if (Math.abs(saw.x - saw.startX) > saw.range) { saw.vx *= -1; saw.x += saw.vx; }
+  }
+
+  // Fireballs
+  if (Date.now() % 1500 < 20) {
+    const rStart = Math.max(0, Math.floor(camY/TILE)-1);
+    const rEnd   = Math.min(ROWS, rStart + Math.ceil(H/TILE)+2);
+    for (let r = rStart; r < rEnd; r++) {
+      for (let c = 0; c < COLS; c++) {
+        if (map[r][c] === 'E') {
+          const dir = c < COLS/2 ? 1 : -1;
+          fireballs.push({ x: c * TILE + TILE/2, y: r * TILE + TILE/2, vx: dir * 3, vy: -2 - Math.random() * 3 });
+        }
+      }
     }
+  }
+  for (let i = fireballs.length - 1; i >= 0; i--) {
+    const f = fireballs[i];
+    f.x += f.vx; f.y += f.vy; f.vy += 0.15; // Gravity on fireballs
+    if (f.y > ROWS * TILE || f.x < -TILE || f.x > W + TILE) fireballs.splice(i, 1);
+    
+    // Player collision with fireballs
+    const dx = player.x + player.w/2 - f.x, dy = player.y + player.h/2 - f.y;
+    if (Math.sqrt(dx*dx + dy*dy) < 14) { gameState = 'dead'; }
   }
 
   if (keys['ArrowLeft']  || keys['KeyA']) { player.vx = -SPEED; player.facingRight = false; }
@@ -226,24 +243,33 @@ function update() {
   const jumpKey = keys['Space'] || keys['ArrowUp'] || keys['KeyW'];
   if (jumpKey && !jumpPressed) {
     if (player.onGround) {
-      player.vy = JUMP;
-      player.jumps = 1;
-      player.onPlatform = null;
+      player.vy = JUMP; player.jumps = 1; player.onPlatform = null;
     } else if (player.jumps < 2) {
-      player.vy = JUMP * 0.9; // Double jump slightly weaker
-      player.jumps = 2;
+      player.vy = JUMP * 0.9; player.jumps = 2;
     }
   }
   jumpPressed = jumpKey;
 
   player.vy = Math.min(player.vy + GRAV, 16);
-  
-  if (player.onPlatform) {
-    player.x += player.onPlatform.vx;
-  }
+  if (player.onPlatform) player.x += player.onPlatform.vx;
 
   player.x += player.vx; resolveX(player);
   player.y += player.vy; resolveY(player);
+
+  // Hazards collision (saws, lava, etc)
+  const px = player.x + player.w/2, py = player.y + player.h/2;
+  const points = [[px, player.y+player.h+1], [px, py], [player.x, py], [player.x+player.w, py]];
+  for (const [hx, hy] of points) {
+    const t = tileAtPx(hx, hy);
+    if (t === 'L') { gameState = 'dead'; break; }
+  }
+  for (const saw of saws) {
+    const dx = px - saw.x, dy = py - saw.y;
+    if (Math.sqrt(dx*dx + dy*dy) < 18) { gameState = 'dead'; break; }
+  }
+
+  // fall off bottom
+  if (player.y > ROWS*TILE + 64) gameState = 'dead';
 
   // clamp X
   player.x = Math.max(0, Math.min(player.x, COLS*TILE - player.w));
@@ -252,25 +278,6 @@ function update() {
   const targetCam = player.y - H/2;
   camY += (targetCam - camY) * 0.12;
   camY = Math.max(0, Math.min(camY, ROWS*TILE - H));
-
-  // coins
-  for (const coin of coins) {
-    if (coin.collected) continue;
-    const cx = coin.c*TILE+8, cy = coin.r*TILE+8;
-    if (player.x < cx+14 && player.x+player.w > cx-6 &&
-        player.y < cy+14 && player.y+player.h > cy-6) coin.collected = true;
-  }
-
-  // Hazards — spikes, lava, saws
-  const px = player.x + player.w/2, py = player.y + player.h/2;
-  const points = [[px, player.y+player.h+1], [px, py], [player.x, py], [player.x+player.w, py]];
-  for (const [hx, hy] of points) {
-    const t = tileAtPx(hx, hy);
-    if (t === '^' || t === 'L' || t === 'S') { gameState = 'dead'; break; }
-  }
-
-  // fall off bottom
-  if (player.y > ROWS*TILE + 64) gameState = 'dead';
 
   // flag
   const collected = coins.filter(c=>c.collected).length;
@@ -287,24 +294,15 @@ function drawTile(t, sx, sy) {
   if (t === '#') {
     ctx.fillStyle = pal.wall; ctx.fillRect(sx, sy, TILE, TILE);
     ctx.fillStyle = pal.wallTop; ctx.fillRect(sx+1, sy+1, TILE-2, 6);
-  } else if (t === '^') {
-    ctx.fillStyle = '#e94560';
-    ctx.beginPath(); ctx.moveTo(sx+TILE/2, sy+3); ctx.lineTo(sx+TILE-4, sy+TILE-2); ctx.lineTo(sx+4, sy+TILE-2); ctx.closePath(); ctx.fill();
+  } else if (t === 'E') {
+    ctx.fillStyle = '#444'; ctx.fillRect(sx, sy, TILE, TILE);
+    ctx.fillStyle = '#f00'; ctx.beginPath(); ctx.arc(sx+TILE/2, sy+TILE/2, 6, 0, Math.PI*2); ctx.fill();
   } else if (t === 'L') {
     ctx.fillStyle = pal.lava; ctx.fillRect(sx, sy+4, TILE, TILE-4);
     ctx.fillStyle = '#fff'; ctx.globalAlpha = 0.3;
     ctx.fillRect(sx, sy+4, TILE, 2); ctx.globalAlpha = 1.0;
   } else if (t === 'S') {
-    ctx.save();
-    ctx.translate(sx + TILE/2, sy + TILE/2);
-    ctx.rotate(Date.now() / 100);
-    ctx.fillStyle = pal.saw;
-    for (let i = 0; i < 8; i++) {
-      ctx.rotate(Math.PI / 4);
-      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(TILE/2, 0); ctx.lineTo(TILE/4, TILE/8); ctx.closePath(); ctx.fill();
-    }
-    ctx.fillStyle = '#444'; ctx.beginPath(); ctx.arc(0,0,4,0,Math.PI*2); ctx.fill();
-    ctx.restore();
+    // Saws are drawn in the main loop now since they move
   } else if (t === 'F') {
     ctx.fillStyle = '#ffd700'; ctx.fillRect(sx+14, sy+2, 4, 22);
     ctx.fillStyle = '#ff6b35'; ctx.fillRect(sx+18, sy+2, 11, 10);
@@ -344,7 +342,7 @@ function draw() {
   for (let r = rStart; r < rEnd; r++) {
     for (let c = 0; c < COLS; c++) {
       const t = ch(c, r);
-      if (t !== ' ') drawTile(t, c*TILE, r*TILE - camY);
+      if (t !== ' ' && t !== 'S') drawTile(t, c*TILE, r*TILE - camY);
     }
   }
 
@@ -354,6 +352,27 @@ function draw() {
     ctx.fillRect(plat.x, plat.y - camY, plat.w, plat.h);
     ctx.fillStyle = pal.wallTop;
     ctx.fillRect(plat.x + 1, plat.y - camY + 1, plat.w - 2, 6);
+  }
+
+  // saws
+  for (const saw of saws) {
+    ctx.save();
+    ctx.translate(saw.x, saw.y - camY);
+    ctx.rotate(Date.now() / 100);
+    ctx.fillStyle = pal.saw;
+    for (let i = 0; i < 8; i++) {
+      ctx.rotate(Math.PI / 4);
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(TILE/2, 0); ctx.lineTo(TILE/4, TILE/8); ctx.closePath(); ctx.fill();
+    }
+    ctx.fillStyle = '#444'; ctx.beginPath(); ctx.arc(0,0,4,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+
+  // fireballs
+  for (const f of fireballs) {
+    ctx.fillStyle = pal.fire;
+    ctx.beginPath(); ctx.arc(f.x, f.y - camY, 8, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(f.x-2, f.y - camY - 2, 3, 0, Math.PI*2); ctx.fill();
   }
 
   // coins
