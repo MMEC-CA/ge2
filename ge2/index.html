@@ -279,6 +279,14 @@ function update() {
   camY += (targetCam - camY) * 0.12;
   camY = Math.max(0, Math.min(camY, ROWS*TILE - H));
 
+  // coins
+  for (const coin of coins) {
+    if (coin.collected) continue;
+    const cx = coin.c*TILE+TILE/2, cy = coin.r*TILE+TILE/2;
+    const dx = px - cx, dy = py - cy;
+    if (Math.sqrt(dx*dx + dy*dy) < 20) coin.collected = true;
+  }
+
   // flag
   const collected = coins.filter(c=>c.collected).length;
   if (tileAtPx(px, player.y + player.h/2) === 'F') {
