@@ -48,13 +48,16 @@ function generateLevel(idx) {
     const maxX = Math.min(COLS - pWidth, lastX + 5);
     const pX = minX + Math.floor(Math.random() * (maxX - minX + 1));
     
+    const isMoving = Math.random() < 0.2 && pWidth >= 4;
     for (let x = pX; x < pX + pWidth; x++) {
-      rows[curY][x] = '#';
-      const rand = Math.random();
-      if (rand < 0.1) {
-        rows[curY][x] = '^'; // Spike
-      } else if (rand < 0.15) {
-        rows[curY][x] = 'S'; // Saw
+      rows[curY][x] = isMoving ? 'M' : '#';
+      if (!isMoving) {
+        const rand = Math.random();
+        if (rand < 0.1) {
+          rows[curY][x] = '^'; // Spike
+        } else if (rand < 0.15) {
+          rows[curY][x] = 'S'; // Saw
+        }
       }
     }
     
@@ -82,15 +85,15 @@ const keys = {};
 document.addEventListener('keydown', e => { keys[e.code] = true; e.preventDefault(); });
 document.addEventListener('keyup',   e => { keys[e.code] = false; });
 
-let levelIndex, map, ROWS, coins, totalCoins, player, camY, gameState, transition;
+let levelIndex, map, ROWS, coins, totalCoins, movingPlatforms, player, camY, gameState, transition;
 let jumpPressed = false;
 
 // Palette per level
 const PALETTES = [
-  { bg: '#0f0f23', wall: '#3d5a80', wallTop: '#4a6fa5', border: '#e94560', lava: '#ff4d4d', saw: '#a0a0a0' },
-  { bg: '#0f1a0f', wall: '#2d5a3d', wallTop: '#3d7a55', border: '#50fa7b', lava: '#ffb347', saw: '#b0b0b0' },
-  { bg: '#1a0f1a', wall: '#5a3d6a', wallTop: '#7a5a8a', border: '#bd93f9', lava: '#ff00ff', saw: '#909090' },
-  { bg: '#1a1a0f', wall: '#6a5a3d', wallTop: '#8a7a5a', border: '#f1fa8c', lava: '#ff8c00', saw: '#808080' },
+  { bg: '#0f0f23', wall: '#3d5a80', wallTop: '#4a6fa5', border: '#e94560', lava: '#ff4d4d', saw: '#a0a0a0', plat: '#5a789c' },
+  { bg: '#0f1a0f', wall: '#2d5a3d', wallTop: '#3d7a55', border: '#50fa7b', lava: '#ffb347', saw: '#b0b0b0', plat: '#4d7a5a' },
+  { bg: '#1a0f1a', wall: '#5a3d6a', wallTop: '#7a5a8a', border: '#bd93f9', lava: '#ff00ff', saw: '#909090', plat: '#7a5a8a' },
+  { bg: '#1a1a0f', wall: '#6a5a3d', wallTop: '#8a7a5a', border: '#f1fa8c', lava: '#ff8c00', saw: '#808080', plat: '#8a7a5a' },
 ];
 
 function loadLevel(idx) {
@@ -105,10 +108,31 @@ function loadLevel(idx) {
 }
 
 function resetLevel() {
-  coins = []; totalCoins = 0;
-  for (let r = 0; r < ROWS; r++)
-    for (let c = 0; c < COLS; c++)
-      if ((map[r][c] || ' ') === '2') { coins.push({ c, r, collected: false }); totalCoins++; }
+  coins = []; totalCoins = 0; movingPlatforms = [];
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const t = map[r][c];
+      if (t === '2') { coins.push({ c, r, collected: false }); totalCoins++; }
+      if (t === 'M') {
+        // Find platform width
+        let w = 1;
+        while (c + w < COLS && map[r][c+w] === 'M') w++;
+        // Create moving platform
+        movingPlatforms.push({
+          x: c * TILE, y: r * TILE,
+          startX: c * TILE,
+          w: w * TILE, h: TILE,
+          vx: 1.5 + Math.random() * 1.5,
+          range: TILE * (2 + Math.random() * 3)
+        });
+        // Erase 'M's from map to avoid static collision
+        const rowArr = map[r].split('');
+        for(let i=0; i<w; i++) rowArr[c+i] = ' ';
+        map[r] = rowArr.join('');
+        c += w - 1;
+      }
+    }
+  }
 
   // Start player at bottom center on the ground
   const startRow = ROWS - 2;
@@ -116,7 +140,8 @@ function resetLevel() {
     x: W/2 - 10, y: startRow * TILE - 26, 
     vx: 0, vy: 0, w: 20, h: 26, 
     onGround: false, facingRight: true,
-    jumps: 0
+    jumps: 0,
+    onPlatform: null
   };
   camY = Math.max(0, Math.min(player.y - H/2, ROWS*TILE - H));
   gameState = 'playing';
@@ -147,6 +172,22 @@ function resolveX(p) {
 }
 function resolveY(p) {
   p.onGround = false;
+  p.onPlatform = null;
+
+  // Check moving platforms
+  for (const plat of movingPlatforms) {
+    if (p.vx >= 0 ? (p.x + p.w > plat.x && p.x < plat.x + plat.w) : (p.x < plat.x + plat.w && p.x + p.w > plat.x)) {
+      if (p.vy >= 0 && p.y + p.h <= plat.y + 10 && p.y + p.h + p.vy >= plat.y) {
+        p.y = plat.y - p.h;
+        p.vy = 0;
+        p.onGround = true;
+        p.jumps = 0;
+        p.onPlatform = plat;
+        return;
+      }
+    }
+  }
+
   const lc = Math.floor((p.x+2)/TILE), rc = Math.floor((p.x+p.w-2)/TILE);
   if (p.vy > 0) {
     const br = Math.floor((p.y+p.h)/TILE);
@@ -169,6 +210,15 @@ function update() {
   }
   if (gameState === 'win' || gameState === 'dead') return;
 
+  // Move platforms
+  for (const plat of movingPlatforms) {
+    plat.x += plat.vx;
+    if (Math.abs(plat.x - plat.startX) > plat.range) {
+      plat.vx *= -1;
+      plat.x += plat.vx;
+    }
+  }
+
   if (keys['ArrowLeft']  || keys['KeyA']) { player.vx = -SPEED; player.facingRight = false; }
   else if (keys['ArrowRight'] || keys['KeyD']) { player.vx = SPEED; player.facingRight = true; }
   else player.vx *= 0.75;
@@ -178,6 +228,7 @@ function update() {
     if (player.onGround) {
       player.vy = JUMP;
       player.jumps = 1;
+      player.onPlatform = null;
     } else if (player.jumps < 2) {
       player.vy = JUMP * 0.9; // Double jump slightly weaker
       player.jumps = 2;
@@ -186,6 +237,11 @@ function update() {
   jumpPressed = jumpKey;
 
   player.vy = Math.min(player.vy + GRAV, 16);
+  
+  if (player.onPlatform) {
+    player.x += player.onPlatform.vx;
+  }
+
   player.x += player.vx; resolveX(player);
   player.y += player.vy; resolveY(player);
 
@@ -290,6 +346,14 @@ function draw() {
       const t = ch(c, r);
       if (t !== ' ') drawTile(t, c*TILE, r*TILE - camY);
     }
+  }
+
+  // moving platforms
+  for (const plat of movingPlatforms) {
+    ctx.fillStyle = pal.plat;
+    ctx.fillRect(plat.x, plat.y - camY, plat.w, plat.h);
+    ctx.fillStyle = pal.wallTop;
+    ctx.fillRect(plat.x + 1, plat.y - camY + 1, plat.w - 2, 6);
   }
 
   // coins
