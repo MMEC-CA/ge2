@@ -86,6 +86,7 @@ document.addEventListener('keydown', e => { keys[e.code] = true; e.preventDefaul
 document.addEventListener('keyup',   e => { keys[e.code] = false; });
 
 let levelIndex, map, ROWS, coins, totalCoins, movingPlatforms, saws, fireballs, player, camY, gameState, transition;
+let lives = 3;
 let jumpPressed = false;
 
 // Palette per level
@@ -97,6 +98,7 @@ const PALETTES = [
 ];
 
 function loadLevel(idx) {
+  if (idx === 0) lives = 3;
   levelIndex = idx;
   map = generateLevel(idx);
   ROWS = map.length;
@@ -105,6 +107,12 @@ function loadLevel(idx) {
   canvas.style.borderColor = pal.border;
 
   resetLevel();
+}
+
+function die() {
+  if (gameState !== 'playing') return;
+  lives--;
+  gameState = 'dead';
 }
 
 function resetLevel() {
@@ -233,7 +241,7 @@ function update() {
     
     // Player collision with fireballs
     const dx = player.x + player.w/2 - f.x, dy = player.y + player.h/2 - f.y;
-    if (Math.sqrt(dx*dx + dy*dy) < 14) { gameState = 'dead'; }
+    if (Math.sqrt(dx*dx + dy*dy) < 14) { die(); }
   }
 
   if (keys['ArrowLeft']  || keys['KeyA']) { player.vx = -SPEED; player.facingRight = false; }
@@ -261,15 +269,15 @@ function update() {
   const points = [[px, player.y+player.h+1], [px, py], [player.x, py], [player.x+player.w, py]];
   for (const [hx, hy] of points) {
     const t = tileAtPx(hx, hy);
-    if (t === 'L') { gameState = 'dead'; break; }
+    if (t === 'L') { die(); break; }
   }
   for (const saw of saws) {
     const dx = px - saw.x, dy = py - saw.y;
-    if (Math.sqrt(dx*dx + dy*dy) < 18) { gameState = 'dead'; break; }
+    if (Math.sqrt(dx*dx + dy*dy) < 18) { die(); break; }
   }
 
   // fall off bottom
-  if (player.y > ROWS*TILE + 64) gameState = 'dead';
+  if (player.y > ROWS*TILE + 64) die();
 
   // clamp X
   player.x = Math.max(0, Math.min(player.x, COLS*TILE - player.w));
@@ -398,7 +406,7 @@ function draw() {
   // HUD
   const collected = coins.filter(c=>c.collected).length;
   ctx.fillStyle = '#ffd700'; ctx.font = 'bold 15px monospace';
-  ctx.fillText(`Level ${levelIndex+1}  Coins: ${collected}/${totalCoins}`, 10, 22);
+  ctx.fillText(`Level ${levelIndex+1}  Lives: ${lives}  Coins: ${collected}/${totalCoins}`, 10, 22);
 
   // flag hint
   if (tileAtPx(player.x+player.w/2, player.y+player.h/2) === 'F' && collected < totalCoins) {
@@ -416,13 +424,16 @@ function draw() {
       ctx.textAlign = 'left';
     }
   }
-  if (gameState === 'dead') overlay('#e94560', 'YOU DIED', 'Press R to retry');
+  if (gameState === 'dead') {
+    if (lives <= 0) overlay('#e94560', 'GAME OVER', 'Press R to restart game');
+    else overlay('#e94560', 'YOU DIED', `Lives left: ${lives} | Press R to retry`);
+  }
   if (gameState === 'win')  overlay('#ffd700', 'YOU WIN!', 'Press R to play again');
 }
 
 document.addEventListener('keydown', e => {
   if (e.code === 'KeyR') {
-    if (gameState === 'win') loadLevel(0);
+    if (gameState === 'win' || (gameState === 'dead' && lives <= 0)) loadLevel(0);
     else resetLevel();
   }
 });
