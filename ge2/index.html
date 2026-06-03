@@ -72,7 +72,9 @@ function generateLevel(idx) {
     
     const coinX = pX + Math.floor(Math.random() * pWidth);
     if (rows[curY][coinX] === '#' || rows[curY][coinX] === 'S' || rows[curY][coinX] === '^') {
-      rows[curY-1][coinX] = '2';
+      const rand = Math.random();
+      if (rand < 0.1) rows[curY-1][coinX] = 'P';
+      else rows[curY-1][coinX] = '2';
     }
     
     lastX = pX + Math.floor(pWidth / 2);
@@ -86,6 +88,10 @@ document.addEventListener('keydown', e => { keys[e.code] = true; e.preventDefaul
 document.addEventListener('keyup',   e => { keys[e.code] = false; });
 
 let levelIndex, map, ROWS, coins, totalCoins, movingPlatforms, saws, fireballs, player, camY, gameState, transition;
+let powerUps = [];
+const POWER_UP_TYPES = ['TELEPORT', 'MAGNET', 'INVINCIBLE', 'FREEZE'];
+let invincibilityTimer = 0;
+let freezeTimer = 0;
 let lives = 3;
 let jumpPressed = false;
 
@@ -110,7 +116,7 @@ function loadLevel(idx) {
 }
 
 function die() {
-  if (gameState !== 'playing') return;
+  if (gameState !== 'playing' || invincibilityTimer > 0) return;
   lives--;
   if (lives > 0) {
     player.x = player.lastSafePos.x;
@@ -123,11 +129,16 @@ function die() {
 }
 
 function resetLevel() {
-  coins = []; totalCoins = 0; movingPlatforms = []; fireballs = []; saws = [];
+  coins = []; totalCoins = 0; movingPlatforms = []; fireballs = []; saws = []; powerUps = [];
+  invincibilityTimer = 0; freezeTimer = 0;
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
       const t = map[r][c];
       if (t === '2') { coins.push({ c, r, collected: false }); totalCoins++; }
+      if (t === 'P') {
+        const type = POWER_UP_TYPES[Math.floor(Math.random() * POWER_UP_TYPES.length)];
+        powerUps.push({ c, r, collected: false, type });
+      }
       if (t === 'M') {
         let w = 1; while (c + w < COLS && map[r][c+w] === 'M') w++;
         movingPlatforms.push({
@@ -219,20 +230,27 @@ function update() {
   }
   if (gameState === 'win' || gameState === 'dead') return;
 
+  if (invincibilityTimer > 0) invincibilityTimer--;
+  if (freezeTimer > 0) freezeTimer--;
+
   // Move platforms
   for (const plat of movingPlatforms) {
-    plat.x += plat.vx;
-    if (Math.abs(plat.x - plat.startX) > plat.range) { plat.vx *= -1; plat.x += plat.vx; }
+    if (freezeTimer <= 0) {
+      plat.x += plat.vx;
+      if (Math.abs(plat.x - plat.startX) > plat.range) { plat.vx *= -1; plat.x += plat.vx; }
+    }
   }
 
   // Move saws
   for (const saw of saws) {
-    saw.x += saw.vx;
-    if (Math.abs(saw.x - saw.startX) > saw.range) { saw.vx *= -1; saw.x += saw.vx; }
+    if (freezeTimer <= 0) {
+      saw.x += saw.vx;
+      if (Math.abs(saw.x - saw.startX) > saw.range) { saw.vx *= -1; saw.x += saw.vx; }
+    }
   }
 
   // Fireballs
-  if (Date.now() % 1500 < 20) {
+  if (freezeTimer <= 0 && Date.now() % 1500 < 20) {
     const rStart = Math.max(0, Math.floor(camY/TILE)-1);
     const rEnd   = Math.min(ROWS, rStart + Math.ceil(H/TILE)+2);
     for (let r = rStart; r < rEnd; r++) {
@@ -246,7 +264,9 @@ function update() {
   }
   for (let i = fireballs.length - 1; i >= 0; i--) {
     const f = fireballs[i];
-    f.x += f.vx; f.y += f.vy; f.vy += 0.15; // Gravity on fireballs
+    if (freezeTimer <= 0) {
+      f.x += f.vx; f.y += f.vy; f.vy += 0.15; // Gravity on fireballs
+    }
     if (f.y > ROWS * TILE || f.x < -TILE || f.x > W + TILE) fireballs.splice(i, 1);
     
     // Player collision with fireballs
@@ -305,6 +325,33 @@ function update() {
   const targetCam = player.y - H/2;
   camY += (targetCam - camY) * 0.12;
   camY = Math.max(0, Math.min(camY, ROWS*TILE - H));
+
+  // powerups
+  for (const p of powerUps) {
+    if (p.collected) continue;
+    const px_p = p.c*TILE+TILE/2, py_p = p.r*TILE+TILE/2;
+    const dx = px - px_p, dy = py - py_p;
+    if (Math.sqrt(dx*dx + dy*dy) < 22) {
+      p.collected = true;
+      if (p.type === 'TELEPORT') {
+        for (let r = 0; r < ROWS; r++) {
+          for (let c = 0; c < COLS; c++) {
+            if (map[r][c] === 'F') {
+              player.x = c * TILE + TILE/2 - player.w/2;
+              player.y = r * TILE + TILE/2 - player.h/2;
+              break;
+            }
+          }
+        }
+      } else if (p.type === 'MAGNET') {
+        coins.forEach(c => c.collected = true);
+      } else if (p.type === 'INVINCIBLE') {
+        invincibilityTimer = 300;
+      } else if (p.type === 'FREEZE') {
+        freezeTimer = 300;
+      }
+    }
+  }
 
   // coins
   for (const coin of coins) {
@@ -420,12 +467,37 @@ function draw() {
     ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.beginPath(); ctx.arc(sx-2,sy-2,3,0,Math.PI*2); ctx.fill();
   }
 
+  // powerups
+  for (const p of powerUps) {
+    if (p.collected) continue;
+    const sx = p.c*TILE+TILE/2, sy = p.r*TILE+TILE/2 - camY + Math.sin(t+p.c)*4;
+    if (sy < -20 || sy > H+20) continue;
+    
+    // Draw gem shape
+    ctx.fillStyle = p.type === 'TELEPORT' ? '#ff00ff' : p.type === 'MAGNET' ? '#00ffff' : p.type === 'INVINCIBLE' ? '#ffffff' : '#0000ff';
+    ctx.beginPath();
+    ctx.moveTo(sx, sy-10); ctx.lineTo(sx+10, sy); ctx.lineTo(sx, sy+10); ctx.lineTo(sx-10, sy);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+  }
+
   drawPlayer(player);
+  if (invincibilityTimer > 0) {
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(player.x+player.w/2, player.y+player.h/2 - camY, 20 + Math.sin(Date.now()/50)*5, 0, Math.PI*2); ctx.stroke();
+  }
 
   // HUD
   const collected = coins.filter(c=>c.collected).length;
   ctx.fillStyle = '#ffd700'; ctx.font = 'bold 15px monospace';
   ctx.fillText(`Level ${levelIndex+1}  Lives: ${lives}  Coins: ${collected}/${totalCoins}`, 10, 22);
+  
+  if (invincibilityTimer > 0) {
+    ctx.fillStyle = '#fff'; ctx.fillText(`INVINCIBLE: ${Math.ceil(invincibilityTimer/60)}s`, 10, 42);
+  }
+  if (freezeTimer > 0) {
+    ctx.fillStyle = '#00f'; ctx.fillText(`FROZEN: ${Math.ceil(freezeTimer/60)}s`, 10, 62);
+  }
 
   // flag hint
   if (tileAtPx(player.x+player.w/2, player.y+player.h/2) === 'F' && collected < totalCoins) {
