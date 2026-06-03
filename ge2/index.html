@@ -113,7 +113,10 @@ function die() {
   if (gameState !== 'playing') return;
   lives--;
   if (lives > 0) {
-    resetLevel();
+    player.x = player.lastSafePos.x;
+    player.y = player.lastSafePos.y;
+    player.vx = 0;
+    player.vy = 0;
   } else {
     gameState = 'dead';
   }
@@ -143,9 +146,12 @@ function resetLevel() {
   }
 
   const startRow = ROWS - 2;
+  const startX = W/2 - 10;
+  const startY = startRow * TILE - 26;
   player = { 
-    x: W/2 - 10, y: startRow * TILE - 26, vx: 0, vy: 0, w: 20, h: 26, 
-    onGround: false, facingRight: true, jumps: 0, onPlatform: null
+    x: startX, y: startY, vx: 0, vy: 0, w: 20, h: 26, 
+    onGround: false, facingRight: true, jumps: 0, onPlatform: null,
+    lastSafePos: { x: startX, y: startY }
   };
   camY = Math.max(0, Math.min(player.y - H/2, ROWS*TILE - H));
   gameState = 'playing'; transition = null;
@@ -267,6 +273,15 @@ function update() {
 
   player.x += player.vx; resolveX(player);
   player.y += player.vy; resolveY(player);
+
+  if (player.onGround) {
+    const tx = Math.floor((player.x + player.w/2) / TILE);
+    const ty = Math.floor((player.y + player.h + 1) / TILE);
+    if (ch(tx, ty) !== 'L') {
+      player.lastSafePos.x = player.x;
+      player.lastSafePos.y = player.y;
+    }
+  }
 
   // Hazards collision (saws, lava, etc)
   const px = player.x + player.w/2, py = player.y + player.h/2;
